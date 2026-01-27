@@ -1,4 +1,4 @@
-# Offline Barcode-Based Event Attendance App (Android)
+# Primitve LA App (Android)
 
 An offline-first Android application for fast and reliable event attendance tracking using 1D barcode scanning. Designed for event organizers and managers who need a simple, secure, and internet-independent solution.
 
