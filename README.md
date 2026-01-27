@@ -72,3 +72,4 @@ The application works fully offline, making it ideal for on-site usage in locati
 ## File Format Examples
 
 ### CSV
+### TXT
