@@ -1,14 +1,20 @@
 package com.example.primitivela
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.room.Room
@@ -24,7 +30,6 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // Initialize Database
         db = Room.databaseBuilder(
             applicationContext,
             AppDatabase::class.java, "attendance-db"
@@ -33,26 +38,55 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             PrimitiveLATheme {
-                // 0 = Dashboard, 1 = Scanner
+                val context = LocalContext.current
                 var currentScreen by remember { mutableIntStateOf(0) }
                 var activeEventId by remember { mutableIntStateOf(-1) }
 
-                // Watch the database for changes automatically
+                // 1. Permission State
+                var hasCameraPermission by remember {
+                    mutableStateOf(
+                        ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.CAMERA
+                        ) == PackageManager.PERMISSION_GRANTED
+                    )
+                }
+
+                // 2. Permission Launcher
+                val permissionLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.RequestPermission()
+                ) { isGranted ->
+                    hasCameraPermission = isGranted
+                    if (!isGranted) {
+                        Toast.makeText(context, "Camera permission is required to scan", Toast.LENGTH_LONG).show()
+                    }
+                }
+
                 val events by dao.getAllEvents().collectAsState(initial = emptyList())
 
                 if (currentScreen == 0) {
                     MainDashboard(
                         events = events,
                         onCreateEvent = { name ->
-                            lifecycleScope.launch {
-                                val id = dao.insertEvent(Event(name = name))
-                                activeEventId = id.toInt()
-                                currentScreen = 1
+                            // Check permission before proceeding to Scanner
+                            if (hasCameraPermission) {
+                                lifecycleScope.launch {
+                                    val id = dao.insertEvent(Event(name = name))
+                                    activeEventId = id.toInt()
+                                    currentScreen = 1
+                                }
+                            } else {
+                                permissionLauncher.launch(Manifest.permission.CAMERA)
                             }
                         },
                         onEventClick = { event ->
-                            activeEventId = event.id
-                            currentScreen = 1
+                            // Check permission before proceeding to Scanner
+                            if (hasCameraPermission) {
+                                activeEventId = event.id
+                                currentScreen = 1
+                            } else {
+                                permissionLauncher.launch(Manifest.permission.CAMERA)
+                            }
                         },
                         onExportClick = { event, format ->
                             lifecycleScope.launch {
@@ -65,7 +99,6 @@ class MainActivity : ComponentActivity() {
                             }
                         },
                         onDeleteClick = { event ->
-                            // Necessary change: Implementing the delete logic
                             lifecycleScope.launch {
                                 dao.deleteEvent(event)
                                 Toast.makeText(this@MainActivity, "Event deleted", Toast.LENGTH_SHORT).show()
@@ -82,7 +115,6 @@ class MainActivity : ComponentActivity() {
                         onCancel = { currentScreen = 0 }
                     )
 
-                    // Hardware back button returns to Dashboard
                     BackHandler { currentScreen = 0 }
                 }
             }
@@ -90,9 +122,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/**
- * Helper function to handle the Android Share Sheet for CSV/TXT exports.
- */
 fun shareEventData(context: Context, eventName: String, records: List<AttendanceRecord>, format: String) {
     val fileName = "${eventName.replace(" ", "_")}.$format"
     val file = File(context.cacheDir, fileName)
