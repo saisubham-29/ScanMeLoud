@@ -8,18 +8,36 @@ import kotlinx.coroutines.flow.Flow
 data class Event(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val name: String,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val hasCsvData: Boolean = false
 )
 
-// 2. The Scanned Barcodes table
+// 2. New entity for CSV student data
+@Entity(tableName = "students")
+data class Student(
+    @PrimaryKey val roll: String,
+    val eventId: Int,
+    val name: String,
+    val morningPresent: Boolean = false,
+    val afternoonPresent: Boolean = false,
+    val eveningPresent: Boolean = false,
+    val morningTime: Long? = null,
+    val afternoonTime: Long? = null,
+    val eveningTime: Long? = null
+)
+
+// 3. The Scanned Barcodes table
 @Entity(tableName = "attendance")
 data class AttendanceRecord(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
-    val eventId: Int, // Connects this scan to a specific event
-    val barcodeValue: String
+    val eventId: Int,
+    val barcodeValue: String,
+    val studentName: String? = null,
+    val session: String = "morning", // morning, afternoon, evening
+    val timestamp: Long = System.currentTimeMillis()
 )
 
-// 3. The Data Access Object (Commands)
+// 4. The Data Access Object (Commands)
 @Dao
 interface AttendanceDao {
     @Insert
@@ -36,11 +54,29 @@ interface AttendanceDao {
 
     @Delete
     suspend fun deleteEvent(event: Event)
+
+    // New methods for CSV functionality
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertStudents(students: List<Student>)
+
+    @Query("SELECT * FROM students WHERE eventId = :eventId AND roll = UPPER(TRIM(:roll))")
+    suspend fun getStudent(eventId: Int, roll: String): Student?
+
+    @Update
+    suspend fun updateStudent(student: Student)
+
+    @Query("SELECT * FROM students WHERE eventId = :eventId ORDER BY name")
+    suspend fun getStudentsForEvent(eventId: Int): List<Student>
+
+    @Query("UPDATE events SET hasCsvData = :hasCsvData WHERE id = :eventId")
+    suspend fun updateEventCsvStatus(eventId: Int, hasCsvData: Boolean)
+
+    @Query("SELECT * FROM attendance WHERE eventId = :eventId AND session = :session")
+    suspend fun getRecordsForSession(eventId: Int, session: String): List<AttendanceRecord>
 }
 
-// 4. The Database Holder
-// Added exportSchema = false to simplify the build process
-@Database(entities = [Event::class, AttendanceRecord::class], version = 1, exportSchema = false)
+// 5. The Database Holder
+@Database(entities = [Event::class, AttendanceRecord::class, Student::class], version = 3, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun attendanceDao(): AttendanceDao
 }

@@ -13,6 +13,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.style.TextAlign
+import kotlinx.coroutines.launch
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.google.mlkit.vision.barcode.BarcodeScanning
@@ -23,15 +25,23 @@ import java.util.concurrent.Executors
 
 @Composable
 fun ScannerScreen(
+    eventId: Int,
+    session: String,
+    dao: AttendanceDao,
     onIdScanned: (String) -> Unit,
     onCancel: () -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
+    val scope = rememberCoroutineScope()
 
     var lastScannedValue by remember { mutableStateOf<String?>(null) }
     var isPaused by remember { mutableStateOf(false) }
+    var scanMessage by remember { mutableStateOf<String?>(null) }
+    var isValidScan by remember { mutableStateOf(false) }
+    var showAddStudentDialog by remember { mutableStateOf(false) }
+    var studentToAdd by remember { mutableStateOf("") }
 
     // FORCE ML KIT TO LOOK FOR ALL BARCODE TYPES (1D IDs & QR)
     val options = remember {
@@ -62,8 +72,40 @@ fun ScannerScreen(
                     imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
                         if (!isPaused) {
                             processImageProxy(scanner, imageProxy) { result ->
-                                lastScannedValue = result
-                                isPaused = true
+                                scope.launch {
+                                    lastScannedValue = result
+                                    
+                                    // Check if student exists in CSV data
+                                    val student = dao.getStudent(eventId, result)
+                                    if (student != null) {
+                                        val isAlreadyPresent = when (session) {
+                                            "morning" -> student.morningPresent
+                                            "afternoon" -> student.afternoonPresent
+                                            "evening" -> student.eveningPresent
+                                            else -> false
+                                        }
+                                        if (isAlreadyPresent) {
+                                            scanMessage = "${student.name} already marked present for $session"
+                                            isValidScan = false
+                                        } else {
+                                            scanMessage = "Thank you ${student.name}\n$session attendance recorded"
+                                            isValidScan = true
+                                        }
+                                    } else {
+                                        // Check if event has CSV data
+                                        val students = dao.getStudentsForEvent(eventId)
+                                        if (students.isNotEmpty()) {
+                                            studentToAdd = result
+                                            showAddStudentDialog = true
+                                            isValidScan = false
+                                        } else {
+                                            // Regular scanning mode
+                                            scanMessage = null
+                                            isValidScan = true
+                                        }
+                                    }
+                                    isPaused = true
+                                }
                             }
                         } else {
                             imageProxy.close()
@@ -100,25 +142,40 @@ fun ScannerScreen(
                         modifier = Modifier.padding(24.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text("Scanned ID:", style = MaterialTheme.typography.labelLarge)
-                        Text(
-                            text = lastScannedValue!!,
-                            style = MaterialTheme.typography.headlineMedium,
-                            modifier = Modifier.padding(vertical = 16.dp)
-                        )
+                        if (scanMessage != null) {
+                            Text(
+                                text = scanMessage!!,
+                                style = MaterialTheme.typography.headlineSmall,
+                                textAlign = TextAlign.Center,
+                                color = if (isValidScan) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                modifier = Modifier.padding(bottom = 16.dp)
+                            )
+                        } else {
+                            Text("Scanned ID:", style = MaterialTheme.typography.labelLarge)
+                            Text(
+                                text = lastScannedValue!!,
+                                style = MaterialTheme.typography.headlineMedium,
+                                modifier = Modifier.padding(vertical = 16.dp)
+                            )
+                        }
+                        
                         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                             OutlinedButton(onClick = {
                                 lastScannedValue = null
+                                scanMessage = null
                                 isPaused = false
                             }) {
                                 Text("Retry")
                             }
-                            Button(onClick = {
-                                onIdScanned(lastScannedValue!!)
-                                lastScannedValue = null
-                                isPaused = false
-                            }) {
-                                Text("Next")
+                            if (isValidScan) {
+                                Button(onClick = {
+                                    onIdScanned(lastScannedValue!!)
+                                    lastScannedValue = null
+                                    scanMessage = null
+                                    isPaused = false
+                                }) {
+                                    Text("Next")
+                                }
                             }
                         }
                     }
@@ -126,17 +183,46 @@ fun ScannerScreen(
             }
         }
 
-        // 3. Back Button
-        IconButton(
-            onClick = onCancel,
+        // 3. Back Button, Session Indicator, and Refresh Button
+        Column(
             modifier = Modifier.padding(top = 40.dp, start = 16.dp)
         ) {
-            Surface(color = Color.Black.copy(alpha = 0.5f), shape = MaterialTheme.shapes.small) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                IconButton(onClick = onCancel) {
+                    Surface(color = Color.Black.copy(alpha = 0.5f), shape = MaterialTheme.shapes.small) {
+                        Text(
+                            " Back ",
+                            color = Color.White,
+                            modifier = Modifier.padding(4.dp),
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+                }
+                IconButton(onClick = { 
+                    lastScannedValue = null
+                    scanMessage = null
+                    isPaused = false
+                }) {
+                    Surface(color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f), shape = MaterialTheme.shapes.small) {
+                        Text(
+                            " Refresh ",
+                            color = Color.White,
+                            modifier = Modifier.padding(4.dp),
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Surface(
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                shape = MaterialTheme.shapes.small
+            ) {
                 Text(
-                    " Back ",
+                    " ${session.capitalize()} Session ",
                     color = Color.White,
-                    modifier = Modifier.padding(4.dp),
-                    style = MaterialTheme.typography.labelLarge
+                    modifier = Modifier.padding(8.dp),
+                    style = MaterialTheme.typography.labelMedium
                 )
             }
         }
