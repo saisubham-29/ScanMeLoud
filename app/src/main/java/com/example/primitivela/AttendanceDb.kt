@@ -73,6 +73,43 @@ interface AttendanceDao {
 
     @Query("SELECT * FROM attendance WHERE eventId = :eventId AND session = :session")
     suspend fun getRecordsForSession(eventId: Int, session: String): List<AttendanceRecord>
+
+    @Query("DELETE FROM students WHERE roll = :roll AND eventId = :eventId")
+    suspend fun deleteStudent(roll: String, eventId: Int)
+
+    suspend fun updateStudentDetails(oldRoll: String, eventId: Int, newStudent: Student) {
+        deleteStudent(oldRoll, eventId)
+        insertStudents(listOf(newStudent))
+    }
+
+    // Migration function to convert old attendance records to new student format
+    suspend fun migrateAttendanceToStudents(eventId: Int) {
+        val records = getRecordsForEvent(eventId)
+        val studentMap = mutableMapOf<String, Student>()
+        
+        records.forEach { record ->
+            val roll = record.barcodeValue
+            val name = record.studentName ?: "Student $roll"
+            val existing = studentMap[roll] ?: Student(
+                roll = roll,
+                eventId = eventId,
+                name = name
+            )
+            
+            val updated = when (record.session) {
+                "morning" -> existing.copy(morningPresent = true, morningTime = record.timestamp)
+                "afternoon" -> existing.copy(afternoonPresent = true, afternoonTime = record.timestamp)
+                "evening" -> existing.copy(eveningPresent = true, eveningTime = record.timestamp)
+                else -> existing
+            }
+            studentMap[roll] = updated
+        }
+        
+        if (studentMap.isNotEmpty()) {
+            insertStudents(studentMap.values.toList())
+            updateEventCsvStatus(eventId, true)
+        }
+    }
 }
 
 // 5. The Database Holder

@@ -32,6 +32,8 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.room.Room
 import com.example.primitivela.ui.theme.PrimitiveLATheme
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
@@ -117,11 +119,21 @@ class MainActivity : ComponentActivity() {
                         },
                         onExportClick = { event, format ->
                             lifecycleScope.launch {
-                                val records = dao.getRecordsForEvent(event.id)
-                                if (records.isNotEmpty()) {
-                                    shareEventData(this@MainActivity, event.name, records, format)
+                                var students = dao.getStudentsForEvent(event.id)
+                                
+                                // If no students but we have records, migrate the data
+                                if (students.isEmpty()) {
+                                    val records = dao.getRecordsForEvent(event.id)
+                                    if (records.isNotEmpty()) {
+                                        dao.migrateAttendanceToStudents(event.id)
+                                        students = dao.getStudentsForEvent(event.id)
+                                    }
+                                }
+                                
+                                if (students.isNotEmpty()) {
+                                    shareStudentData(this@MainActivity, event.name, students, format)
                                 } else {
-                                    Toast.makeText(this@MainActivity, "No scans to export!", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(this@MainActivity, "No data to export!", Toast.LENGTH_SHORT).show()
                                 }
                             }
                         },
@@ -231,15 +243,62 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+fun shareStudentData(context: Context, eventName: String, students: List<Student>, format: String) {
+    val fileName = "${eventName.replace(" ", "_")}.$format"
+    val file = File(context.cacheDir, fileName)
+
+    val content = if (format == "csv") {
+        "Name,Roll,Morning_Attendance,Morning_Time,Afternoon_Attendance,Afternoon_Time,Evening_Attendance,Evening_Time\n" +
+        students.joinToString("\n") { student ->
+            val morningTime = student.morningTime?.let { 
+                SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(it)) 
+            } ?: ""
+            val afternoonTime = student.afternoonTime?.let { 
+                SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(it)) 
+            } ?: ""
+            val eveningTime = student.eveningTime?.let { 
+                SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(it)) 
+            } ?: ""
+            
+            "${student.name},${student.roll}," +
+            "${if (student.morningPresent) "Present" else "Absent"},$morningTime," +
+            "${if (student.afternoonPresent) "Present" else "Absent"},$afternoonTime," +
+            "${if (student.eveningPresent) "Present" else "Absent"},$eveningTime"
+        }
+    } else {
+        students.joinToString("\n") { student ->
+            val sessions = mutableListOf<String>()
+            if (student.morningPresent) sessions.add("Morning")
+            if (student.afternoonPresent) sessions.add("Afternoon") 
+            if (student.eveningPresent) sessions.add("Evening")
+            "${student.name} (${student.roll}) - ${sessions.joinToString(", ")}"
+        }
+    }
+
+    try {
+        file.writeText(content)
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
+
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, "Export Attendance"))
+    } catch (e: Exception) {
+        Toast.makeText(context, "Export failed: ${e.message}", Toast.LENGTH_SHORT).show()
+    }
+}
+
 fun shareEventData(context: Context, eventName: String, records: List<AttendanceRecord>, format: String) {
     val fileName = "${eventName.replace(" ", "_")}.$format"
     val file = File(context.cacheDir, fileName)
 
     val content = if (format == "csv") {
-        "Student_Name,Roll_Number,Session,Timestamp,Attendance_Ratio\n" + 
+        "Student_Name,Roll_Number,Session,Timestamp\n" + 
         records.joinToString("\n") { record ->
             val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(record.timestamp))
-            "${record.studentName ?: "N/A"},${record.barcodeValue},${record.session},$timestamp,1/1"
+            "${record.studentName ?: "N/A"},${record.barcodeValue},${record.session},$timestamp"
         }
     } else {
         records.joinToString("\n") { record ->

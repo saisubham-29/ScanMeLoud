@@ -42,6 +42,8 @@ fun ScannerScreen(
     var isValidScan by remember { mutableStateOf(false) }
     var showAddStudentDialog by remember { mutableStateOf(false) }
     var studentToAdd by remember { mutableStateOf("") }
+    var showNameDialog by remember { mutableStateOf(false) }
+    var newStudentName by remember { mutableStateOf("") }
 
     // FORCE ML KIT TO LOOK FOR ALL BARCODE TYPES (1D IDs & QR)
     val options = remember {
@@ -225,6 +227,101 @@ fun ScannerScreen(
                     style = MaterialTheme.typography.labelMedium
                 )
             }
+        }
+
+        // Add Student Dialog
+        if (showAddStudentDialog) {
+            AlertDialog(
+                onDismissRequest = { 
+                    showAddStudentDialog = false
+                    isPaused = false
+                },
+                title = { Text("Roll Not Found") },
+                text = { 
+                    Text("Roll number '$studentToAdd' not found.\nDo you want to add this student?") 
+                },
+                confirmButton = {
+                    Button(onClick = {
+                        showAddStudentDialog = false
+                        showNameDialog = true
+                    }) {
+                        Text("Yes")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showAddStudentDialog = false
+                        isPaused = false
+                    }) {
+                        Text("No")
+                    }
+                }
+            )
+        }
+
+        // Name Input Dialog
+        if (showNameDialog) {
+            AlertDialog(
+                onDismissRequest = { 
+                    showNameDialog = false
+                    newStudentName = ""
+                    isPaused = false
+                },
+                title = { Text("Add Student") },
+                text = { 
+                    Column {
+                        Text("Roll: $studentToAdd")
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = newStudentName,
+                            onValueChange = { newStudentName = it },
+                            label = { Text("Student Name") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = {
+                        if (newStudentName.isNotBlank()) {
+                            scope.launch {
+                                dao.insertStudents(listOf(
+                                    Student(
+                                        roll = studentToAdd.uppercase().trim(),
+                                        eventId = eventId,
+                                        name = newStudentName.trim()
+                                    )
+                                ))
+                                // Mark attendance for current session
+                                val student = dao.getStudent(eventId, studentToAdd)
+                                if (student != null) {
+                                    val updatedStudent = when (session) {
+                                        "morning" -> student.copy(morningPresent = true, morningTime = System.currentTimeMillis())
+                                        "afternoon" -> student.copy(afternoonPresent = true, afternoonTime = System.currentTimeMillis())
+                                        "evening" -> student.copy(eveningPresent = true, eveningTime = System.currentTimeMillis())
+                                        else -> student
+                                    }
+                                    dao.updateStudent(updatedStudent)
+                                    dao.insertRecord(AttendanceRecord(eventId = eventId, barcodeValue = studentToAdd, studentName = student.name, session = session))
+                                }
+                                showNameDialog = false
+                                newStudentName = ""
+                                isPaused = false
+                            }
+                        }
+                    }) {
+                        Text("Add")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showNameDialog = false
+                        newStudentName = ""
+                        isPaused = false
+                    }) {
+                        Text("Cancel")
+                    }
+                }
+            )
         }
     }
 }
